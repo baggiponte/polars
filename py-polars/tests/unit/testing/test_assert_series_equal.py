@@ -8,6 +8,7 @@ import pytest
 
 import polars as pl
 from polars.testing import assert_series_equal, assert_series_not_equal
+from polars.testing.asserts.series import _cannot_check_inexact
 
 
 def test_compare_series_value_mismatch() -> None:
@@ -697,3 +698,19 @@ def test_assert_series_equal_unsigned_ints_underflow() -> None:
     s2 = pl.Series([2, 4], dtype=pl.Int64)
 
     assert_series_equal(s1, s2, atol=1, check_dtype=False)
+
+
+@pytest.mark.parametrize(
+    ("left", "right", "expected"),
+    [
+        (pl.Float64, pl.Float64, False),
+        (pl.Float64, pl.Int32, False),
+        (pl.Float64, pl.Utf8, True),
+        (pl.Float64, pl.List(pl.List(pl.Int8)), False),
+        (pl.Struct({"a": pl.Utf8}), pl.List(pl.List(pl.Int8)), True),
+    ],
+)
+def test_cannot_check_inexact(
+    left: pl.PolarsDataType, right: pl.PolarsDataType, expected: bool
+) -> None:
+    assert _cannot_check_inexact(left, right) is expected

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from polars.datatypes import (
     FLOAT_DTYPES,
     NESTED_DTYPES,
@@ -16,6 +18,9 @@ from polars.datatypes import (
 from polars.exceptions import ComputeError
 from polars.series import Series
 from polars.testing.asserts.utils import raise_assertion_error
+
+if TYPE_CHECKING:
+    from polars.type_aliases import PolarsDataType
 
 
 def assert_series_equal(
@@ -132,17 +137,10 @@ def _assert_series_values_equal(
         if right.dtype == Categorical:
             right = right.cast(Utf8)
 
-    if (
-        check_exact
-        or left.dtype not in NUMERIC_DTYPES
-        or right.dtype not in NUMERIC_DTYPES
-    ):
+    if check_exact or _cannot_check_inexact(left.dtype, right.dtype):
         _assert_series_values_equal_exact(
             left,
             right,
-            check_exact=check_exact,
-            rtol=rtol,
-            atol=atol,
             nans_compare_equal=nans_compare_equal,
             categorical_as_str=categorical_as_str,
         )
@@ -150,7 +148,6 @@ def _assert_series_values_equal(
         _assert_series_values_equal_inexact(
             left,
             right,
-            check_exact=check_exact,
             rtol=rtol,
             atol=atol,
             nans_compare_equal=nans_compare_equal,
@@ -158,13 +155,16 @@ def _assert_series_values_equal(
         )
 
 
+def _cannot_check_inexact(left: PolarsDataType, right: PolarsDataType) -> bool:
+    """Can only check (possibly nested) numeric dtypes."""
+    dtypes = unpack_dtypes(left, right)
+    return bool(dtypes - NUMERIC_DTYPES)
+
+
 def _assert_series_values_equal_exact(
     left: Series,
     right: Series,
     *,
-    check_exact: bool,
-    rtol: float,
-    atol: float,
     nans_compare_equal: bool,
     categorical_as_str: bool,
 ) -> None:
@@ -195,24 +195,14 @@ def _assert_series_values_equal_exact(
         if contains_floats and _assert_series_nested(
             left=left.filter(unequal),
             right=right.filter(unequal),
-            check_exact=check_exact,
-            rtol=rtol,
-            atol=atol,
+            check_exact=True,
             nans_compare_equal=nans_compare_equal,
             categorical_as_str=categorical_as_str,
         ):
             return
 
     # If no differences found during exact checking, we're done
-    if not unequal.any():
-        return
-
-    # Only do inexact checking for numeric types
-    if (
-        check_exact
-        or left.dtype not in NUMERIC_DTYPES
-        or right.dtype not in NUMERIC_DTYPES
-    ):
+    if unequal.any():
         raise_assertion_error(
             "Series",
             "exact value mismatch",
@@ -220,25 +210,11 @@ def _assert_series_values_equal_exact(
             right=right.to_list(),
         )
 
-    _assert_series_null_values_match(left, right)
-    if comparing_floats:
-        _assert_series_nan_values_match(
-            left, right, nans_compare_equal=nans_compare_equal
-        )
-    _assert_series_values_within_tolerance(
-        left,
-        right,
-        unequal,
-        rtol=rtol,
-        atol=atol,
-    )
-
 
 def _assert_series_values_equal_inexact(
     left: Series,
     right: Series,
     *,
-    check_exact: bool,
     rtol: float,
     atol: float,
     nans_compare_equal: bool,
@@ -278,7 +254,7 @@ def _assert_series_values_equal_inexact(
         if contains_floats and _assert_series_nested(
             left=left.filter(unequal),
             right=right.filter(unequal),
-            check_exact=check_exact,
+            check_exact=False,
             rtol=rtol,
             atol=atol,
             nans_compare_equal=nans_compare_equal,
@@ -289,19 +265,6 @@ def _assert_series_values_equal_inexact(
     # If no differences found during exact checking, we're done
     if not unequal.any():
         return
-
-    # Only do inexact checking for numeric types
-    if (
-        check_exact
-        or left.dtype not in NUMERIC_DTYPES
-        or right.dtype not in NUMERIC_DTYPES
-    ):
-        raise_assertion_error(
-            "Series",
-            "exact value mismatch",
-            left=left.to_list(),
-            right=right.to_list(),
-        )
 
     _assert_series_null_values_match(left, right)
     if comparing_floats:
@@ -352,10 +315,10 @@ def _assert_series_nested(
     right: Series,
     *,
     check_exact: bool,
-    rtol: float,
-    atol: float,
     nans_compare_equal: bool,
     categorical_as_str: bool,
+    rtol: float = 1e-5,
+    atol: float = 1e-8,
 ) -> bool:
     # compare nested lists element-wise
     if left.dtype == List == right.dtype:
