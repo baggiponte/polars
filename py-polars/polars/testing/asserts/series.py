@@ -161,6 +161,17 @@ def _cannot_check_inexact(left: PolarsDataType, right: PolarsDataType) -> bool:
     return bool(dtypes - NUMERIC_DTYPES)
 
 
+def _comparing_floats(left: PolarsDataType, right: PolarsDataType) -> bool:
+    return left.dtype in FLOAT_DTYPES and right.dtype in FLOAT_DTYPES
+
+
+def _comparing_nested_floats(left: PolarsDataType, right: PolarsDataType) -> bool:
+    """Can only check (possibly nested) numeric dtypes."""
+    
+    dtypes = unpack_dtypes(left, right)
+    return bool(dtypes & FLOAT_DTYPES)
+
+
 def _assert_series_values_equal_exact(
     left: Series,
     right: Series,
@@ -182,24 +193,25 @@ def _assert_series_values_equal_exact(
         )
 
     # Handle NaN values (which compare unequal to themselves)
-    comparing_floats = left.dtype in FLOAT_DTYPES and right.dtype in FLOAT_DTYPES
-    if comparing_floats and nans_compare_equal:
-        both_nan = (left.is_nan() & right.is_nan()).fill_null(False)
-        unequal = unequal & ~both_nan
+    if nans_compare_equal:
+        comparing_floats = left.dtype in FLOAT_DTYPES and right.dtype in FLOAT_DTYPES
+        if comparing_floats:
+            both_nan = (left.is_nan() & right.is_nan()).fill_null(False)
+            unequal = unequal & ~both_nan
 
-    # Check nested dtypes in separate function
-    if left.dtype in NESTED_DTYPES and right.dtype in NESTED_DTYPES:
-        # check that float values exist at _some_ level of nesting
-        contains_floats = FLOAT_DTYPES & unpack_dtypes(left.dtype, right.dtype)
+        # Check nested dtypes in separate function
+        elif left.dtype in NESTED_DTYPES and right.dtype in NESTED_DTYPES:
+            # check that float values exist at _some_ level of nesting
+            contains_floats = _comparing_nested_floats(left.dtype, right.dtype)
 
-        if contains_floats and _assert_series_nested(
-            left=left.filter(unequal),
-            right=right.filter(unequal),
-            check_exact=True,
-            nans_compare_equal=nans_compare_equal,
-            categorical_as_str=categorical_as_str,
-        ):
-            return
+            if contains_floats and _assert_series_nested(
+                left=left.filter(unequal),
+                right=right.filter(unequal),
+                check_exact=True,
+                nans_compare_equal=nans_compare_equal,
+                categorical_as_str=categorical_as_str,
+            ):
+                return
 
     # If no differences found during exact checking, we're done
     if unequal.any():
