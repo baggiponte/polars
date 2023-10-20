@@ -132,6 +132,126 @@ def _assert_series_values_equal(
         if right.dtype == Categorical:
             right = right.cast(Utf8)
 
+    if (
+        check_exact
+        or left.dtype not in NUMERIC_DTYPES
+        or right.dtype not in NUMERIC_DTYPES
+    ):
+        _assert_series_values_equal_exact(
+            left,
+            right,
+            check_exact=check_exact,
+            rtol=rtol,
+            atol=atol,
+            nans_compare_equal=nans_compare_equal,
+            categorical_as_str=categorical_as_str,
+        )
+    else:
+        _assert_series_values_equal_inexact(
+            left,
+            right,
+            check_exact=check_exact,
+            rtol=rtol,
+            atol=atol,
+            nans_compare_equal=nans_compare_equal,
+            categorical_as_str=categorical_as_str,
+        )
+
+
+def _assert_series_values_equal_exact(
+    left: Series,
+    right: Series,
+    *,
+    check_exact: bool,
+    rtol: float,
+    atol: float,
+    nans_compare_equal: bool,
+    categorical_as_str: bool,
+) -> None:
+    """Assert that the values in both Series are equal."""
+    # Determine unequal elements
+    try:
+        unequal = left.ne_missing(right)
+    except ComputeError as exc:
+        raise_assertion_error(
+            "Series",
+            "incompatible data types",
+            left=left.dtype,
+            right=right.dtype,
+            cause=exc,
+        )
+
+    # Handle NaN values (which compare unequal to themselves)
+    comparing_floats = left.dtype in FLOAT_DTYPES and right.dtype in FLOAT_DTYPES
+    if comparing_floats and nans_compare_equal:
+        both_nan = (left.is_nan() & right.is_nan()).fill_null(False)
+        unequal = unequal & ~both_nan
+
+    # Check nested dtypes in separate function
+    if left.dtype in NESTED_DTYPES and right.dtype in NESTED_DTYPES:
+        # check that float values exist at _some_ level of nesting
+        contains_floats = FLOAT_DTYPES & unpack_dtypes(left.dtype, right.dtype)
+
+        if contains_floats and _assert_series_nested(
+            left=left.filter(unequal),
+            right=right.filter(unequal),
+            check_exact=check_exact,
+            rtol=rtol,
+            atol=atol,
+            nans_compare_equal=nans_compare_equal,
+            categorical_as_str=categorical_as_str,
+        ):
+            return
+
+    # If no differences found during exact checking, we're done
+    if not unequal.any():
+        return
+
+    # Only do inexact checking for numeric types
+    if (
+        check_exact
+        or left.dtype not in NUMERIC_DTYPES
+        or right.dtype not in NUMERIC_DTYPES
+    ):
+        raise_assertion_error(
+            "Series",
+            "exact value mismatch",
+            left=left.to_list(),
+            right=right.to_list(),
+        )
+
+    _assert_series_null_values_match(left, right)
+    if comparing_floats:
+        _assert_series_nan_values_match(
+            left, right, nans_compare_equal=nans_compare_equal
+        )
+    _assert_series_values_within_tolerance(
+        left,
+        right,
+        unequal,
+        rtol=rtol,
+        atol=atol,
+    )
+
+
+def _assert_series_values_equal_inexact(
+    left: Series,
+    right: Series,
+    *,
+    check_exact: bool,
+    rtol: float,
+    atol: float,
+    nans_compare_equal: bool,
+    categorical_as_str: bool,
+) -> None:
+    """Assert that the values in both Series are equal."""
+    # Handle categoricals
+    if categorical_as_str:
+        if left.dtype == Categorical:
+            left = left.cast(Utf8)
+        if right.dtype == Categorical:
+            right = right.cast(Utf8)
+
     # Determine unequal elements
     try:
         unequal = left.ne_missing(right)
