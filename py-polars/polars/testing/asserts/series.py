@@ -7,6 +7,7 @@ from polars.datatypes import (
     NESTED_DTYPES,
     NUMERIC_DTYPES,
     UNSIGNED_INTEGER_DTYPES,
+    Array,
     Categorical,
     Int64,
     List,
@@ -142,7 +143,6 @@ def _assert_series_values_equal(
             left,
             right,
             nans_compare_equal=nans_compare_equal,
-            categorical_as_str=categorical_as_str,
         )
     else:
         _assert_series_values_equal_inexact(
@@ -161,23 +161,11 @@ def _cannot_check_inexact(left: PolarsDataType, right: PolarsDataType) -> bool:
     return bool(dtypes - NUMERIC_DTYPES)
 
 
-def _comparing_floats(left: PolarsDataType, right: PolarsDataType) -> bool:
-    return left.dtype in FLOAT_DTYPES and right.dtype in FLOAT_DTYPES
-
-
-def _comparing_nested_floats(left: PolarsDataType, right: PolarsDataType) -> bool:
-    """Can only check (possibly nested) numeric dtypes."""
-    
-    dtypes = unpack_dtypes(left, right)
-    return bool(dtypes & FLOAT_DTYPES)
-
-
 def _assert_series_values_equal_exact(
     left: Series,
     right: Series,
     *,
     nans_compare_equal: bool,
-    categorical_as_str: bool,
 ) -> None:
     """Assert that the values in both Series are equal."""
     # Determine unequal elements
@@ -192,26 +180,10 @@ def _assert_series_values_equal_exact(
             cause=exc,
         )
 
-    # Handle NaN values (which compare unequal to themselves)
     if nans_compare_equal:
-        comparing_floats = left.dtype in FLOAT_DTYPES and right.dtype in FLOAT_DTYPES
-        if comparing_floats:
-            both_nan = (left.is_nan() & right.is_nan()).fill_null(False)
-            unequal = unequal & ~both_nan
-
-        # Check nested dtypes in separate function
-        elif left.dtype in NESTED_DTYPES and right.dtype in NESTED_DTYPES:
-            # check that float values exist at _some_ level of nesting
-            contains_floats = _comparing_nested_floats(left.dtype, right.dtype)
-
-            if contains_floats and _assert_series_nested(
-                left=left.filter(unequal),
-                right=right.filter(unequal),
-                check_exact=True,
-                nans_compare_equal=nans_compare_equal,
-                categorical_as_str=categorical_as_str,
-            ):
-                return
+        _assert_series_nan_values_match(left, right)
+    else:
+        ...
 
     # If no differences found during exact checking, we're done
     if unequal.any():
@@ -221,6 +193,53 @@ def _assert_series_values_equal_exact(
             left=left.to_list(),
             right=right.to_list(),
         )
+
+
+def _assert_series_nan_values_match(left: Series, right: Series) -> None:
+    if _comparing_floats(left.dtype, right.dtype):
+        _assert_series_float_nan_values_match(left, right)
+    elif _comparing_lists(left.dtype, right.dtype):
+        _assert_series_nan_values_match(left.explode(), right.explode())
+    elif _comparing_structs(left.dtype, right.dtype):
+        _assert_series_struct_nan_values_match(left, right)
+
+
+def _comparing_floats(left: PolarsDataType, right: PolarsDataType) -> bool:
+    return left in FLOAT_DTYPES and right in FLOAT_DTYPES
+
+
+def _comparing_lists(left: PolarsDataType, right: PolarsDataType) -> bool:
+    return left in (List, Array) and right in (List, Array)
+
+
+def _comparing_structs(left: PolarsDataType, right: PolarsDataType) -> bool:
+    return left == Struct and right == Struct
+
+
+def _assert_series_float_nan_values_match(left: Series, right: Series) -> None:
+    nan_value_mismatch = left.is_nan() != right.is_nan()
+    if nan_value_mismatch.any():
+        raise_assertion_error(
+            "Series",
+            "nan value mismatch - nans compare equal",
+            left.to_list(),
+            right.to_list(),
+        )
+
+
+def _comparing_nested_floats(left: PolarsDataType, right: PolarsDataType) -> bool:
+    comparing_nested = left in NESTED_DTYPES and right in NESTED_DTYPES
+    if comparing_nested:
+        dtypes = unpack_dtypes(left, right)
+        return bool(dtypes & FLOAT_DTYPES)
+    else:
+        return False
+
+
+def _assert_series_struct_nan_values_match(left: Series, right: Series) -> None:
+    ls, rs = left.struct.unnest(), right.struct.unnest()
+    for s1, s2 in zip(ls, rs):
+        _assert_series_nan_values_match(s1, s2)
 
 
 def _assert_series_values_equal_inexact(
@@ -280,7 +299,7 @@ def _assert_series_values_equal_inexact(
 
     _assert_series_null_values_match(left, right)
     if comparing_floats:
-        _assert_series_nan_values_match(
+        _assert_series_nan_values_match2(
             left, right, nans_compare_equal=nans_compare_equal
         )
     _assert_series_values_within_tolerance(
@@ -300,7 +319,7 @@ def _assert_series_null_values_match(left: Series, right: Series) -> None:
         )
 
 
-def _assert_series_nan_values_match(
+def _assert_series_nan_values_match2(
     left: Series, right: Series, *, nans_compare_equal: bool
 ) -> None:
     if nans_compare_equal:
