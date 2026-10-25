@@ -19,7 +19,7 @@ polars-plan = { path = "../crates/polars-plan", default-features = false }
 ahash = ">=0.8.5"
 ciborium = "0.2"
 either = "1.8"
-lexical-core = "0.8"
+lexical-core = "1.0"
 libc = "0.2"
 ndarray = { version = "0.15", default-features = false }
 numpy = { version = "0.20", default-features = false }
